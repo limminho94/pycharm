@@ -227,10 +227,10 @@ def boxplot_seoul_temperature_visualize() -> None:
 
 def main() -> None:
     # seoul_temperature_analysis()
-    # seoul_temperature_visualize()
+    seoul_temperature_visualize()
     # hist_dice()
     # hist_seoul_temperature_visualize()
-    boxplot_seoul_temperature_visualize()
+    # boxplot_seoul_temperature_visualize()
 
 
 if __name__ == "__main__":
