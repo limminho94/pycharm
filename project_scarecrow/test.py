@@ -1,13 +1,13 @@
 import socket
 
 HOST = '10.10.20.105'  # 서버 IP
-PORT = 12342  # 서버 포트
+PORT = 12346  # 서버 포트
 
 client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 client_socket.connect((HOST, PORT))
 
 # 전송할 데이터 준비
-type = '8'
+type = '10'
 sender_id = "1"  # 클라이언트 ID
 msg = "hello!"  # 보낼 메시지
 
@@ -28,8 +28,9 @@ print("인코딩 한 데이터 : ",en_data)
 # 서버로부터 응답 받기
 # length_data = client_socket.recv(4)  # 서버가 전송한 응답 길이 받기
 # response_length = int.from_bytes(length_data, byteorder="big")  # 응답 길이
-response = client_socket.recv()  # 응답 데이터 받기
-print(f"서버 응답: {response.decode('utf-8')}")  # 응답 출력
+data = client_socket.recv(1024)
+msg = data.decode()  # 데이터를 출력한다.
+print('서버에서 온 데이터 : ', msg)
 
 # 연결 종료
 client_socket.close()
