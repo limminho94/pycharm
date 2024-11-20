@@ -6,11 +6,17 @@ from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 from PyQt5.QtWidgets import *
 from PyQt5.uic import loadUi
+import serial
+import time
+
+from PyQt5.uic.properties import QtGui
+
+# 아두이노 연결
+board = serial.Serial('COM3', 9600)
 
 # 영상 출력 반복 스레드
 class Thread(QThread):
     changePixmap = pyqtSignal(QImage, np.ndarray)
-    recordVideo = pyqtSignal(QImage)
     working = True
     cap = None
 
@@ -36,6 +42,7 @@ class Thread(QThread):
 
             cvc = QImage(rgbImage.data, w, h, bytes_per_line, QImage.Format_RGB888)
             self.changePixmap.emit(cvc.scaled(640, 480, Qt.KeepAspectRatio), frame)
+
         self.cap.release()
 
 # Qt 창
@@ -46,18 +53,26 @@ class CCTV(QMainWindow):
         self.initUI()
         # 영상 출력 반복 스레드
         self.th = Thread(self)
+        # 부저 클릭 시 경고음 재생
+        self.pushButton.clicked.connect(self.btn)
+        # 부저 종료 클릭 시 경고음 종료
+        self.pushButton_2.clicked.connect(self.btn_stop)
+
 
     # UI 초기화 (영상 출력될 label 한 개, 시작버튼 한 개, 종료버튼 한 개)
     def initUI(self):
         # ui 파일 읽어오기
         loadUi('cctv.ui', self)
 
+
     # 시작 버튼 누름
     def cam_open(self):
+
         # 영상 읽어오기
         self.th.working = True
         self.th.changePixmap.connect(self.setImage)
         self.th.start()
+
 
     #  종료 버튼 누름
     def cam_close(self):
@@ -69,6 +84,15 @@ class CCTV(QMainWindow):
     def setImage(self, image):
         self.label_view.setPixmap(QPixmap.fromImage(image))
 
+    # 부저 버튼 누름
+    def btn(self):
+        board.write(b'1')
+        pixmap = QPixmap('hesuabi.jpg')
+        self.label_view.setPixmap(pixmap.scaled(640,800, Qt.KeepAspectRatio))
+
+    # 부저 종료 버튼 누름
+    def btn_stop(self):
+        board.write(b'0')
 
 # 메인: Qt창 시작
 if __name__ == "__main__":
