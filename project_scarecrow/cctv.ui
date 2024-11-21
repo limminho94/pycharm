@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>805</width>
-    <height>661</height>
+    <width>796</width>
+    <height>522</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -18,8 +18,8 @@
     <rect>
      <x>20</x>
      <y>20</y>
-     <width>600</width>
-     <height>600</height>
+     <width>640</width>
+     <height>480</height>
     </rect>
    </property>
    <property name="styleSheet">
@@ -32,7 +32,7 @@
   <widget class="QPushButton" name="btn_open">
    <property name="geometry">
     <rect>
-     <x>650</x>
+     <x>680</x>
      <y>20</y>
      <width>89</width>
      <height>25</height>
@@ -45,7 +45,7 @@
   <widget class="QPushButton" name="btn_close">
    <property name="geometry">
     <rect>
-     <x>650</x>
+     <x>680</x>
      <y>60</y>
      <width>89</width>
      <height>25</height>
@@ -53,32 +53,6 @@
    </property>
    <property name="text">
     <string>종료</string>
-   </property>
-  </widget>
-  <widget class="QPushButton" name="pushButton">
-   <property name="geometry">
-    <rect>
-     <x>650</x>
-     <y>100</y>
-     <width>89</width>
-     <height>25</height>
-    </rect>
-   </property>
-   <property name="text">
-    <string>부저</string>
-   </property>
-  </widget>
-  <widget class="QPushButton" name="pushButton_2">
-   <property name="geometry">
-    <rect>
-     <x>650</x>
-     <y>140</y>
-     <width>89</width>
-     <height>25</height>
-    </rect>
-   </property>
-   <property name="text">
-    <string>부저종료</string>
    </property>
   </widget>
  </widget>
