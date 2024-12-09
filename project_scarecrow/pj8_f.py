@@ -7,9 +7,11 @@ import threading
 import time
 import warnings
 import pathlib
+import pygame
 from enum import Enum
 from queue import Queue
 from datetime import datetime
+
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 pathlib.PosixPath = pathlib.WindowsPath
@@ -29,20 +31,20 @@ HOST = '10.10.20.105'  # 서버 IP
 PORT = 12345  # 서버 포트
 
 # YOLOv5 Configuration
-model_path = 'C:/Users/lms115/PycharmProjects/pythonProject2/yolov5/runs/GOGO/weights/best.pt'
+model_path = 'C:/Users/aidlv/PycharmProjects/pythonProject/yolov5/runs/good/weights/best.pt'
 model = torch.hub.load('ultralytics/yolov5', 'custom', path=model_path, force_reload=True)
 TRACKABLE_CLASSES = ['person', 'birds', 'wild_boar', 'gorani']
 
 # Arduino Configuration
 try:
-    arduino = serial.Serial('COM3', 9600, timeout=1, write_timeout=5)
+    arduino = serial.Serial('COM7', 9600, timeout=1, write_timeout=5)
     time.sleep(3)
 except serial.SerialException as e:
     print(f"Arduino connection error: {e}")
     sys.exit()
 
 # Webcam Configuration
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(1)
 if not cap.isOpened():
     print("Cannot open webcam.")
     sys.exit()
@@ -55,7 +57,7 @@ try:
     print("서버 소켓 연결 성공")
 except socket.error as e:
     print(f"서버 연결 실패: {e}")
-    sys.exit()
+    #sys.exit()
 
 
 # Data Receiver Thread
@@ -125,7 +127,9 @@ class CCTV:
         self.last_alert_time = {cls: 0 for cls in TRACKABLE_CLASSES}
         self.frame_queue = Queue(maxsize=1)
         self.lock = threading.Lock()
-
+        self.latest_frame = None  # 최신 원본 프레임
+        self.processed_frame = None  # YOLO 처리 결과 프레임
+        self.lock = threading.Lock()  # 스레드 동기화
         self.alert_interval = 300
         self.search_mode = False
         self.search_direction = "LEFT"
@@ -137,6 +141,7 @@ class CCTV:
         self.last_send_time = time.time()
         self.connect_to_server()  # 서버와 연결
         self.start_receiving()
+        self.gif_player = None  # 초기값을 None으로 설정
 
     def connect_to_server(self):
         try:
@@ -173,7 +178,6 @@ class CCTV:
         if response:
             print(f"Arduino response: {response}")
 
-    # read_frames: 프레임 읽기 및 큐 크기 처리
     def read_frames(self):
         while not self.stop:
             ret, frame = cap.read()
@@ -182,10 +186,9 @@ class CCTV:
                 self.stop = True
                 break
 
+            # 최신 원본 프레임 업데이트
             with self.lock:
-                if self.frame_queue.full():  # 큐가 가득 차면 오래된 프레임 제거
-                    self.frame_queue.get()
-                self.frame_queue.put(frame)
+                self.latest_frame = cv2.resize(frame, (640, 480))  # 필요시 크기 조정
 
             time.sleep(0.01)  # CPU 부하 방지
 
@@ -203,15 +206,28 @@ class CCTV:
 
         while not self.stop:
             with self.lock:
-                if self.frame_queue.empty():
+                if self.latest_frame is None:
                     time.sleep(0.01)
                     continue
-                frame = self.frame_queue.get()
+                frame = self.latest_frame.copy()  # 최신 프레임 복사
 
             # YOLO 모델 추론
             results = model(frame)
             df = results.pandas().xyxy[0]
-            df = df[df['name'].isin(TRACKABLE_CLASSES)]
+
+            # YOLO 결과 반영
+            for _, row in df.iterrows():
+                xmin, ymin, xmax, ymax = int(row['xmin']), int(row['ymin']), int(row['xmax']), int(row['ymax'])
+                label = f"{row['name']} {row['confidence']:.2f}"
+                cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
+                cv2.putText(frame, label, (xmin, ymin - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+            # YOLO 처리된 프레임 저장
+            with self.lock:
+                self.processed_frame = frame
+
+            time.sleep(0.05)  # 추론 주기
+
             current_time = time.time()
 
             # 객체가 감지되지 않은 경우: 탐지 실패 카운트 증가
@@ -263,6 +279,14 @@ class CCTV:
                     # 탐지 횟수 10회 이상인 경우 알림 전송 및 카운트 누적
                     if self.detection_count[name] >= 10:
                         print(f"Alert: {name} detected 10 times within 5 seconds!")
+
+                        # 여기서 GIF 전환 추가
+                        if not self.gif_player.is_timer_active:  # GIF 전환 중복 방지
+                            self.gif_player.switch_to_gif()  # GIF로 전환
+                            pygame.time.set_timer(pygame.USEREVENT, 2000)  # 5초 후 PNG로 복귀
+                            self.gif_player.is_timer_active = True
+                            print("Switched to alert GIF.")
+
                         try:
                             # BUZZ 신호 전송
                             arduino.write("BUZZ\n".encode())
@@ -329,41 +353,45 @@ class CCTV:
                     except serial.SerialTimeoutException as e:
                         print(f"Write timeout: {e}. Retrying...")
 
-
     def display_frame(self):
         while not self.stop:
             with self.lock:
-                if self.frame_queue.empty():
+                if self.processed_frame is None:
+                    time.sleep(0.01)
                     continue
-                frame = self.frame_queue.queue[0].copy()
+                frame = self.processed_frame.copy()  # YOLO 처리된 프레임 복사
 
-            results = model(frame)
-            df = results.pandas().xyxy[0]
-            for _, row in df.iterrows():
-                xmin, ymin, xmax, ymax = int(row['xmin']), int(row['ymin']), int(row['xmax']), int(row['ymax'])
-                label = f"{row['name']} {row['confidence']:.2f}"
-                cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
-                cv2.putText(frame, label, (xmin, ymin - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-
+            # 디스플레이
             cv2.imshow("YOLO Detection", frame)
-            if cv2.waitKey(1) & 0xFF == 27:
+            if cv2.waitKey(1) & 0xFF == 27:  # ESC 키로 종료
                 self.stop = True
                 break
 
-    # stream_thread: 서버로 스트림 데이터 전송
+            time.sleep(0.01)  # CPU 부하 방지
+
     def start_streaming(self):
         try:
             while not self.stop:
                 if self.send_images:
                     with self.lock:
-                        if self.frame_queue.empty():
+                        if self.latest_frame is None:
                             time.sleep(0.01)
                             continue
-                        frame = self.frame_queue.queue[0]  # 최신 프레임 가져오기
+                        frame = self.latest_frame.copy()  # 최신 원본 프레임 복사
 
-                    _, buffer = cv2.imencode('.jpg', frame)
+                    # YOLO 추론 결과를 사용해 스트리밍
+                    success, buffer = cv2.imencode('.jpg', frame)
+                    if not success:
+                        print("Failed to encode frame.")
+                        continue
+
                     image_data = buffer.tobytes()
-                    self.send_data_to_server(ACT.CCTVIMG.value, '1', image_data)
+                    try:
+                        self.send_data_to_server(ACT.CCTVIMG.value, '1', image_data)
+                        print(f"Sent frame to server: {len(image_data)} bytes")
+                    except Exception as e:
+                        print(f"Failed to send frame to server: {e}")
+
                     time.sleep(0.1)  # 전송 주기
                 else:
                     time.sleep(0.5)  # 스트림 비활성화 상태 대기
@@ -376,30 +404,134 @@ class CCTV:
         self.data_receiver_thread.stop()
         self.data_receiver_thread.join()
         client_socket.close()
+        cv2.destroyAllWindows()
         print("연결 종료 및 리소스 정리 완료")
 
 
+class MixedPlayer:
+    def __init__(self, screen, png_path, gif_path, cctv):
+        self.screen = screen
+        self.png_path = png_path
+        self.gif_path = gif_path
+        self.cctv = cctv
+
+        # 초기 이미지와 GIF 로드
+        self.current_image = self.load_png(self.png_path)
+        self.gif_frames = self.load_gif(self.gif_path)
+        self.is_timer_active = False
+        self.frame_index = 0
+        self.last_update_time = time.time()
+
+    def load_png(self, png_path):
+        image = pygame.image.load(png_path)
+        return pygame.transform.scale(image, (1920, 1080))
+
+    def load_gif(self, gif_path):
+        gif = cv2.VideoCapture(gif_path)
+        frames = []
+        while True:
+            ret, frame = gif.read()
+            if not ret:
+                break
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame = pygame.surfarray.make_surface(frame.swapaxes(0, 1))
+            frames.append(frame)
+        gif.release()
+        return frames
+
+    def switch_to_gif(self):
+        if not self.is_timer_active:
+            self.current_image = None
+            self.frame_index = 0
+            self.last_update_time = time.time()
+            self.is_timer_active = True
+            print("Switched to GIF.")
+
+    def switch_to_png(self):
+        self.current_image = self.load_png(self.png_path)
+        self.is_timer_active = False
+        print("Switched back to PNG.")
+
+    def handle_timer_event(self):
+        if self.is_timer_active:
+            print("Timer event: Switching back to PNG.")
+            self.switch_to_png()
+
+    def render(self):
+        if self.current_image:
+            self.screen.blit(self.current_image, (0, 0))
+        else:
+            current_time = time.time()
+            if current_time - self.last_update_time >= 0.033:
+                self.frame_index = (self.frame_index + 1) % len(self.gif_frames)
+                self.last_update_time = current_time
+            self.screen.blit(self.gif_frames[self.frame_index], (0, 0))
+
+
+
+
+def start_pygame_mixed_player(png_path, gif_path, cctv):
+    pygame.init()
+    screen = pygame.display.set_mode((1920, 1080))
+    pygame.display.set_caption("Pygame Mixed Player")
+
+    mixed_player = MixedPlayer(screen, png_path, gif_path, cctv)
+    cctv.gif_player = mixed_player  # CCTV 객체에 MixedPlayer 연결
+
+    clock = pygame.time.Clock()
+    running = True
+    while running:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            elif event.type == pygame.USEREVENT:
+                mixed_player.handle_timer_event()
+
+        # PNG 또는 GIF 렌더링
+        screen.fill((0, 0, 0))  # 배경 초기화
+        mixed_player.render()
+        pygame.display.flip()
+        clock.tick(30)
+
+    pygame.quit()
+
+
+
 if __name__ == "__main__":
-    cctv = CCTV()
+    # CCTV 객체 생성
+    cctv = CCTV()  # gif_player는 나중에 연결
+
+    # Pygame Mixed Player 실행
+    mixed_thread = threading.Thread(
+        target=start_pygame_mixed_player,
+        args=(
+            "C:/Users/aidlv/PycharmProjects/pythonProject/stand.png",
+            "C:/Users/aidlv/PycharmProjects/pythonProject/attack.gif",
+            cctv,
+        ),
+        daemon=True,
+    )
+    mixed_thread.start()
+
     try:
-        # 스레드 구성
+        # 기타 CCTV 초기화 및 스레드 실행
         read_thread = threading.Thread(target=cctv.read_frames, daemon=True)
         process_thread = threading.Thread(target=cctv.process_frame, daemon=True)
-        stream_thread = threading.Thread(target=cctv.start_streaming, daemon=True)  # start_streaming 추가
+        display_thread = threading.Thread(target=cctv.display_frame, daemon=True)
+        stream_thread = threading.Thread(target=cctv.start_streaming, daemon=True)
 
-        # 스레드 시작
         read_thread.start()
         process_thread.start()
+        display_thread.start()
         stream_thread.start()
 
-        cctv.display_frame()  # 디스플레이 실행
+        read_thread.join()
+        process_thread.join()
+        display_thread.join()
     except Exception as e:
         print(f"Error occurred: {e}")
     finally:
-        # 종료 및 리소스 정리
         cctv.stop = True
-        read_thread.join()
-        process_thread.join()
-        stream_thread.join()  # stream_thread 종료 대기
-        cctv.stop_streaming()  # stop_streaming 호출로 리소스 정리 일괄 처리
+        cctv.stop_streaming()
         print("Program terminated.")
+
