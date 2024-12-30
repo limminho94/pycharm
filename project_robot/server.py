@@ -1,111 +1,105 @@
 import pydobot
 import socket
-import threading
-from torch.xpu import device
+import cv2
+import numpy as np
+import struct
+import torch
+from keras import device
 
-# 좌표 설정
+# 로봇팔 초기 위치 설정
 x1, y1, z1 = 235, 0, 118
 
-# 도봇 장치 초기화
-def MachineSetting():
+def machine_setting():
     global device
-    port = 'COM4'
+    port = 'COM5'
     device = pydobot.Dobot(port=port, verbose=True)
     device.move_to(x1, y1, z1, 0)
+    device.wait(500)
 
-# 도봇 테스트 동작
-def moveTest():
-    x1 = 235
+def move_test():
+    x1 = 180
     y1 = 0
-    z1 = -5
+    z1 = -10
 
     device.move_to(x1, y1, z1, 0)
     device.wait(2000)
     device.suck(True)
-    z1 += 20
+    print("로봇팔 흡입성공")
+    z1 += -40
     device.move_to(x1, y1, z1, 0)
     device.suck(False)
+    print("로봇팔 흡입끝")
 
-# 클라이언트 메시지 송신
-def sendMessages(client_socket):
-    try:
-        while True:
-            msg = input("서버에서 보낼 메시지 입력: ")
-            if msg == "exit":
-                break
-            data = msg.encode()
-            length = len(data)
-            client_socket.sendall(length.to_bytes(4, byteorder='big'))  # 메시지 길이 전송
-            client_socket.sendall(data)  # 실제 메시지 전송
-    except Exception as e:
-        print("송신 오류:", e)
-    finally:
-        client_socket.close()
+    x1, y1, z1 = 235, 0, 118
+    device.move_to(x1, y1, z1,0)
 
-# 클라이언트 메시지 수신
-def receiveMessages(client_socket, addr):
-    try:
-        while True:
-            # 1. 헤더 받기 (여기서는 "i"를 받는 예시)
-            header = client_socket.recv(1)  # "i"는 1바이트
-            if not header:
-                break
+def receive_frame(client_socket):
+    data = b''
+    payload_size = struct.calcsize("L")
+    while len(data) < payload_size:
+        data += client_socket.recv(4096)
 
-            # 헤더가 예상과 다르면 오류 처리 가능
-            if header != b'img':
-                print(f"[{addr}] 예상하지 못한 헤더: {header}")
-                break
+    # 이미지 크기 정보 추출
+    packed_size = data[:payload_size]
+    data = data[payload_size:]
+    msg_size = struct.unpack("L", packed_size)[0]
 
-            # 2. 길이 받기 (ushort로 보냈다면 2바이트 길이)
-            length_data = client_socket.recv(2)
-            if not length_data:
-                break
+    # 이미지 데이터 수신
+    while len(data) < msg_size:
+        data += client_socket.recv(4096)
 
-            # 3. 길이 해석 (big-endian으로 해석)
-            length = int.from_bytes(length_data, "big")
+    # 수신된 데이터를 이미지로 변환
+    frame_data = data[:msg_size]
+    frame = np.frombuffer(frame_data, dtype=np.uint8)
+    frame = cv2.imdecode(frame, cv2.IMREAD_COLOR)
+    print("프레임:", frame)
+    return frame
 
-            # 4. 실제 데이터 받기 (길이에 맞춰 데이터를 받음)
-            frame_data = client_socket.recv(length)
-            if not frame_data:
-                break
+# YOLOv5 모델 불러오기
+model = torch.hub.load('ultralytics/yolov5', 'custom', path='C:/Users/lms116/PycharmProjects/pycharm/yolov5/runs/train/exp6/weights/best.pt', force_reload=True, device='cpu')
 
-            try:
-                # 5. UTF-8로 해석 시도 (문자 데이터인 경우)
-                msg = frame_data.decode('utf-8')
-                print(f"[{addr}] 받은 메시지(문자): {msg}")
-            except UnicodeDecodeError:
-                # 6. 바이너리 데이터 처리
-                print(f"[{addr}] 받은 메시지(바이너리): {frame_data[:10]}...")  # 앞 10바이트만 출력
+# 서버 설정
+server_ip = '10.10.20.116'
+server_port = 12345
+server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server_socket.bind((server_ip, server_port))
+server_socket.listen(5)
+print(f"서버가 {server_ip},{server_port}에서 대기 중입니다...")
 
-    except Exception as ex:
-        print(f"[{addr}] 예외 발생: {ex}")
-    finally:
-        client_socket.close()
+# 클라이언트 연결 대기
+client_socket, addr = server_socket.accept()
+print(f"클라이언트 연결됨: {addr}")
 
+# 로봇팔 초기 세팅
+machine_setting()
 
-# 서버 설정 및 클라이언트 연결 처리
-def connectToClnt():
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server_socket.bind(('10.10.20.116', 12345))
-    server_socket.listen()
-    print('서버 대기 중...')
+# 데이터 처리 반복문
+while True:
+    frame = receive_frame(client_socket)
+    if frame is not None:
+        # YOLOv5 객체 탐지 수행
+        results = model(frame)
 
-    try:
-        while True:
-            client_socket, addr = server_socket.accept()
-            print(f'클라이언트 연결 성공: {addr}')
+        # 탐지 결과 표시 및 로봇팔 동작
+        for obj in results.pred[0]:
+            x1, y1, x2, y2, conf, cls = obj[:6]
+            label = f"{model.names[int(cls)]} {conf:.2f}"
+            cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
+            cv2.putText(frame, label, (int(x1), int(y1) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-            # 수신 및 송신 쓰레드 시작
-            recv_thread = threading.Thread(target=receiveMessages, args=(client_socket, addr))
-            send_thread = threading.Thread(target=sendMessages, args=(client_socket,))
-            recv_thread.start()
-            send_thread.start()
-    except Exception as e:
-        print("서버 오류:", e)
-    finally:
-        server_socket.close()
+            # 신뢰도가 0.3 이상인 경우 로봇팔 동작
+            if conf > 0.3:
+                move_test()
 
-# 메인 실행
-if __name__ == "__main__":
-    connectToClnt()
+        # 화면 출력
+        cv2.imshow("window", frame)
+
+        if cv2.waitKey(10) & 0xFF == ord('q'):
+            break
+    else:
+        print("이미지 수신 실패")
+
+# 연결 종료
+client_socket.close()
+server_socket.close()
+cv2.destroyAllWindows()
