@@ -2,7 +2,7 @@ import torch
 import cv2
 
 # YOLOv5 모델 불러오기
-model = torch.hub.load('ultralytics/yolov5', 'custom', path='C:/Users/lms116/PycharmProjects/pycharm/yolov5/runs/train/exp6/weights/best.pt', force_reload=True)
+model = torch.hub.load('ultralytics/yolov5', 'custom', path='C:/Users/lms116/PycharmProjects/pycharm/yolov5/runs/train/exp8/weights/best.pt', force_reload=True)
 
 # 웹캠 연결
 cap = cv2.VideoCapture(0)
